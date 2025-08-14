@@ -1,25 +1,18 @@
 import h2o
 import gradio as gr
 import pandas as pd
+import os
+import functools
 
-# Initialize H2O cluster safely
-try:
+# Set up Java path for H2O
+os.environ["JAVA_HOME"] = "/usr/lib/jvm/java-11-openjdk-amd64"
+os.environ["PATH"] += os.pathsep + os.path.join(os.environ["JAVA_HOME"], "bin")
+
+@functools.lru_cache(maxsize=1)
+def get_model():
     h2o.init()
-except Exception as e:
-    print(f"H2O initialization failed, attempting to shutdown existing cluster and retry: {e}")
-    try:
-        h2o.cluster().shutdown()
-        h2o.init()
-    except Exception as e2:
-        print(f"H2O retry failed: {e2}")
-        pass
-
-# Load trained model
-try:
-    model = h2o.load_model("GBM_grid_1_AutoML_1_20250807_144050_model_2")
-except Exception as e:
-    print(f"Could not load H2O model. Please ensure the model file is accessible. Error: {e}")
-    model = None
+    model_path = os.path.join(os.path.dirname(__file__), "GBM_grid_1_AutoML_1_20250807_144050_model_2")
+    return h2o.load_model(model_path)
 
 features = ['Car Company Names', 'Cars Names', 'Engines', 'CC/Battery Capacity', 'HorsePower',
             'Total Speed', 'Performance(0 - 100 )KM/H', 'Fuel Types', 'Seats', 'Torque']
@@ -27,12 +20,8 @@ features = ['Car Company Names', 'Cars Names', 'Engines', 'CC/Battery Capacity',
 def predict_price(company_code, model_code, engine_code,
                   cc_battery, horsepower, top_speed,
                   perf_0_100, fuel_type_code, seats, torque):
-    """
-    Predicts the car price based on input features.
-    """
-    if model is None:
-        return "Error: Machine Learning model is not loaded. Please check server logs."
     try:
+        model = get_model()
         input_dict = {
             'Car Company Names': [int(company_code)],
             'Cars Names': [int(model_code)],
@@ -45,19 +34,17 @@ def predict_price(company_code, model_code, engine_code,
             'Seats': [int(seats)],
             'Torque': [float(torque)]
         }
-        
         input_df = pd.DataFrame(input_dict)
         h2o_input = h2o.H2OFrame(input_df)
         h2o_input['Engines'] = h2o_input['Engines'].asfactor()
         h2o_input['Fuel Types'] = h2o_input['Fuel Types'].asfactor()
         prediction = model.predict(h2o_input)
-        price_pred = prediction.as_data_frame().iloc[0,0]
-        
+        price_pred = prediction.as_data_frame().iloc[0, 0]
         return f"Estimated Price (USD): ${price_pred:,.2f}"
     except Exception as e:
-        return f"An error occurred during prediction: {str(e)}"
+        return f"Error: {str(e)}"
 
-# Updated CSS for a modern car-themed UI
+# CSS
 custom_css = """
 body {
     background: linear-gradient(135deg, #1e3c72, #2a5298);
@@ -166,10 +153,12 @@ with gr.Blocks(css=custom_css, theme=gr.themes.Soft()) as demo:
 
     output = gr.Textbox(label="Estimated Price", interactive=False)
 
-    predict_btn.click(fn=predict_price,
-                      inputs=[company_code, model_code, engine_code, cc_battery, horsepower,
-                              top_speed, zero_to_100, fuel_type_code, seats, torque],
-                      outputs=output)
+    predict_btn.click(
+        fn=predict_price,
+        inputs=[company_code, model_code, engine_code, cc_battery, horsepower,
+                top_speed, zero_to_100, fuel_type_code, seats, torque],
+        outputs=output
+    )
 
 if __name__ == "__main__":
-    demo.launch(share=True)
+    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)))
